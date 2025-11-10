@@ -1,0 +1,128 @@
+---
+title: "Emergency Waiting time Analysis"
+format: html
+editor: visual
+---
+
+## Loading necessary libraries:
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+library(dplyr)
+library(hms)
+library(lubridate)
+
+```
+
+## Loading the ER Waiting Times data:
+
+```{r}
+#| Warning: false
+#| message: false
+#| include: true
+
+
+ERdata <- read.csv("https://raw.githubusercontent.com/Archangelo08/Data-Analytics-SAIT-Projects/refs/heads/main/Data%20Analytics%20Capstone/ER%20Wait%20Time%20Dataset.csv")
+```
+
+## Data cleaning and transformations
+
+**Checking for nulls and errors:**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  sapply(function(x) sum(is.na(x)| x == ""))
+
+```
+
+There are no nulls or empty rows found in the Emergency Waiting times data.
+
+**Checking the data types for each variable:**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+str(ERdata)
+
+```
+
+The \[Visit Date\] column is assigned with "chr" data type. This should be assigned with the appropriate date-time data type. To do this, first, the date and time components will be separated into two new calculated columns: "Date of visit" and "Time of visit". After, we will remove the \[Visit Date\] column since it will not be used in the succeeding analysis.
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata <- ERdata %>% 
+  mutate(Visit.Date = as.POSIXct(Visit.Date, format = "%Y-%m-%d %H:%M:%S")) %>% 
+  mutate(
+    Date_of_visit = as.Date(Visit.Date),
+    Time_of_visit = as_hms(Visit.Date)
+  ) %>% 
+  select(-Visit.Date)
+```
+
+After further inspection of the data, we found out that the \[Time of Day\] column does not accurately describe the time of day based on the time value in the \[Time of visit\] column, hence it will be removed. A new calculated column will be created in the succeeding section.
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata <- ERdata %>% 
+  select(-Time.of.Day)
+```
+
+**Changing column names for clarity:**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata <- ERdata %>% 
+  rename(
+    Available.Beds = Facility.Size..Beds.,
+    Time.to.Registration.min = Time.to.Registration..min.,
+    Time.to.Triage.min = Time.to.Triage..min.,
+    Time.to.Medical.Professional.min = Time.to.Medical.Professional..min.,
+    Total.Wait.Time.min = Total.Wait.Time..min.
+  )
+```
+
+## Exploratory Data Analysis
+
+In this section, distribution of the different features will be explored and relationships between them will be uncovered.
+
+Distribution of Hospitals by Region
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  group_by(Region) %>% 
+  summarize(No_of_hospitals = n_distinct(Hospital.Name)) %>% 
+  ggplot(aes(Region,No_of_hospitals)) +
+  geom_col() +
+  labs(
+    title = "Number of Hospitals by Region",
+    x = ""
+  ) +
+  theme_minimal()
+  
+```
+
+This data is being represented by 2 hospitals in the Rural region and 3 in the Urban region.
+
+## Descriptive Analysis
