@@ -14,6 +14,7 @@ editor: visual
 library(dplyr)
 library(hms)
 library(lubridate)
+library(tidyverse)
 
 ```
 
@@ -99,11 +100,106 @@ ERdata <- ERdata %>%
   )
 ```
 
+**Added a new column Updated_time_of_day, categorizes each time into Early Morning, Late Morning, Afternoon, Evening and Night.**
+
+*Although this is a good grouping for Time of Day each patient visited the Emergency Department, I think it would be a better idea to group it based on the 3, 24-hour shift of Nurses and Doctors. This would be a better analysis that would give us insights, such as "we saw a significantly longer wait times during Night Shifts". Some of the possible reasons can be: Low Nurse-to-patient ratio.*
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata <- ERdata %>%
+  mutate(
+    hour = hour(Time_of_visit),
+
+    Updated_time_of_day = case_when(
+      hour >= 4  & hour < 8  ~ "Early Morning",
+      hour >= 8  & hour < 12 ~ "Late Morning",
+      hour >= 12 & hour < 17 ~ "Afternoon",
+      hour >= 17 & hour < 20 ~ "Evening",
+      TRUE ~ "Night"   # 20–23pm and 0–3 (mdnight - am)
+    )
+  ) %>%
+  select(-hour)   # removes temporary hour column
+
+sum(is.na(ERdata$Updated_time_of_day)) # check for NA values
+
+
+```
+
+Added a new column "Satisfaction_group" that categorizes Patient.Satisfaction scores (1–5) into:
+
+-   Satisfied (4-5)
+
+<!-- -->
+
+-   Neutral (3)
+
+-   Dissatisfied (1-2)
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+ERdata <- ERdata %>%
+  mutate(
+    Satisfaction_group = case_when(
+      Patient.Satisfaction %in% c(4, 5) ~ "Satisfied",
+      Patient.Satisfaction == 3 ~ "Neutral",
+      Patient.Satisfaction %in% c(1, 2) ~ "Dissatisfied",
+    )
+  )
+```
+
+Get min and max values for Total.Wait.Time.min
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+min(ERdata$Total.Wait.Time.min, na.rm = TRUE)
+max(ERdata$Total.Wait.Time.min, na.rm = TRUE)
+```
+
+Added a new column Waiting_time_group, assigns each patient's total wait time (in minutes) into one of the 6 categories:
+
+-   Very Short Wait (4–14)
+
+-   Short Wait (15–29)
+
+-   Moderate Wait (30–59)
+
+-   Long Wait (60–119)
+
+-   Very Long Wait (120–239)
+
+-   Excessive Wait (240–442)
+
+    ```{r}
+    #| warning: false
+    #| message: false
+    #| include: true
+
+    ERdata <- ERdata %>%
+      mutate(
+        Waiting_time_group = case_when(
+          Total.Wait.Time.min >= 4   & Total.Wait.Time.min <= 14  ~ "Very Short Wait",
+          Total.Wait.Time.min >= 15  & Total.Wait.Time.min <= 29  ~ "Short Wait",
+          Total.Wait.Time.min >= 30  & Total.Wait.Time.min <= 59  ~ "Moderate Wait",
+          Total.Wait.Time.min >= 60  & Total.Wait.Time.min <= 119 ~ "Long Wait",
+          Total.Wait.Time.min >= 120 & Total.Wait.Time.min <= 239 ~ "Very Long Wait",
+          Total.Wait.Time.min >= 240 & Total.Wait.Time.min <= 442 ~ "Excessive Wait",
+          TRUE ~ NA_character_   # fallback if something is outside expected range
+        )
+      )
+    ```
+
 ## Exploratory Data Analysis
 
 In this section, distribution of the different features will be explored and relationships between them will be uncovered.
 
-Distribution of Hospitals by Region
+**Distribution of Hospitals by Region**
 
 ```{r}
 #| warning: false
@@ -125,4 +221,119 @@ ERdata %>%
 
 This data is being represented by 2 hospitals in the Rural region and 3 in the Urban region.
 
-## Descriptive Analysis
+**Number of Patients by Season**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  group_by(Season) %>% 
+  summarize(No_of_patients = n()) %>% 
+  ggplot(aes(reorder(Season, No_of_patients), No_of_patients)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Distribution of patients by Season",
+    x = "",
+    y = "Number of Patients"
+  ) +
+  theme_minimal()
+```
+
+In terms of Season, we see more patients visiting the Emergency department in Summer, followed by Winter, Fall, and Spring.
+
+**Number of Patients by Urgency Level**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  group_by(Urgency.Level) %>% 
+  summarize(No_of_patients = n()) %>% 
+  ggplot(aes(reorder(Urgency.Level, No_of_patients), No_of_patients)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Distribution of Patients by Urgency Level",
+    x = "Urgency Level",
+    y = ""
+  ) +
+  theme_minimal()
+```
+
+**Distribution of Patients by Staff Shift**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+
+ERdata %>% 
+  group_by(Time_of_Day) %>% 
+  summarize(No_of_patients = n()) %>% 
+  ggplot(aes(Time_of_Day, No_of_patients)) +
+  geom_col() +
+  labs(
+    title = "Distribution of Patients by Shift",
+    x = "Shift",
+    y = ""
+  ) +
+  theme_minimal()
+```
+
+## Finding the best regression model
+
+**Convert categorical variables to factors**
+
+*Factors should be applied when creating the regression model.*
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+#| 
+ERdata <- ERdata %>%
+  mutate(
+    Region = factor(Region),
+    Season = factor(Season),
+    Day.of.Week = factor(Day.of.Week),
+    Updated_time_of_day = factor(Updated_time_of_day)
+  )
+
+```
+
+**Creating a multiple regression model including all predictor variables**
+
+```{r}
+model_full <- lm(
+  Total.Wait.Time.min ~ 
+    Nurse.to.Patient.Ratio +
+    Specialist.Availability +
+    Available.Beds +
+    Region +
+    Season +
+    Day.of.Week +
+    Updated_time_of_day,
+  data = ERdata
+)
+
+```
+
+**Stepwise regression, Backward/Forward combined (direction = "both")**
+
+```{r}
+model_step <- step(
+  model_full,
+  direction = "both",
+  trace = TRUE    # FALSE if don't want to trace/see each step
+)
+
+summary(model_step) # view final model
+model_step$call # view which predictors were kept
+
+```
