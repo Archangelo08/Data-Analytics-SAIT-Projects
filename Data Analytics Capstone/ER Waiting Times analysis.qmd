@@ -4,6 +4,46 @@ format: html
 editor: visual
 ---
 
+# Business Understanding
+
+## Who is our Client?
+
+In a recent article by Global News they cited a report by the Montreal Economic Institute (MEI) stating that the median duration of stay in an Alberta emergency room in 2024 was three hours and fifty-eight minutes—fifty-four minutes longer than in 2019 (Cobb, 2025). This indicates that patients have seen no improvements in timely access to care over the past five years. The report also noted that, despite efforts by Government of Alberta to reduce wait times, Chris Gallaway—executive director of the “Friends of Medicare advocacy”—emphasized that a robust staffing plan is necessary to achieve meaningful reductions in wait times and improve overall patient care.
+
+In response, Alberta Health Services (AHS)--the province-wide health authority responsible for operating hospitals, urgent cares, clinics, and health programs across Alberta—hired 5 data analyst consultants to analyze emergency wait time data from different hospitals. Their objective is to identify the factors driving delays and to predict traffic and wait times based on variables such as urgency level, nurse-to-patient ratio, and specialist availability. This analysis will support AHS in optimizing resource allocation to achieve the improvements highlighted by Gallaway.
+
+## Business Questions
+
+-   At what times of day, days of week, or months are wait times the longest?
+
+-   Are wait times longer for different urgency levels? This will help the analyst understand if increasing the number of specialists available would reduce wait times for patients with higher urgency levels
+
+-   What is the threshold wait time where patients consider it as unsatisfactory?
+
+-   How does staff utilization and facility correlate with wait times? Which resource constraints caused the most bottleneck?
+
+-   Can we identify patients who are at high risk of leaving without being seen?
+
+**Multiple regression Analysis**
+
+-   Which combination of variables best predicts wait times and patient satisfaction?
+
+-   Can we build a regression model that predicts wait times and satisfaction scores under different variable conditions?
+
+**Monte-carlo simulation:**
+
+-   How do different resource allocation strategies affect the distribution of wait times and satisfaction scores?
+
+-   Which interventions consistently reduce wait times across a wide range of simulated scenarios while staying cost-effective?
+
+# Data Understanding
+
+**Data format:** CSV
+
+**Rows and Columns:** 50,000 rows and 20 columns
+
+# Data Cleaning
+
 ## Loading necessary libraries:
 
 ```{r}
@@ -15,6 +55,9 @@ library(dplyr)
 library(hms)
 library(lubridate)
 library(tidyverse)
+library(tidytext)
+library(corrplot)
+library(olsrr)
 
 ```
 
@@ -64,12 +107,11 @@ The \[Visit Date\] column is assigned with "chr" data type. This should be assig
 #| include: true
 
 ERdata <- ERdata %>% 
-  mutate(Visit.Date = as.POSIXct(Visit.Date, format = "%Y-%m-%d %H:%M:%S")) %>% 
+  mutate(Visit.Date = as.POSIXct(Visit.Date, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")) %>% 
   mutate(
     Date_of_visit = as.Date(Visit.Date),
     Time_of_visit = as_hms(Visit.Date)
-  ) %>% 
-  select(-Visit.Date)
+  )
 ```
 
 After further inspection of the data, we found out that the \[Time of Day\] column does not accurately describe the time of day based on the time value in the \[Time of visit\] column, hence it will be removed. A new calculated column will be created in the succeeding section.
@@ -100,6 +142,24 @@ ERdata <- ERdata %>%
   )
 ```
 
+As a replacement of the Time of day, we will be creating a new calculated column, Shift, that groups the time each patient visited the Emergency department. Patients will be group by the hour they visited and by the three shifts in a 24-hour period.
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata <- ERdata %>% 
+  mutate(
+    Shift = case_when(
+      hour(Time_of_visit) %in% c(7,8,9,10,11,12,13,14) ~ "Day",
+      hour(Time_of_visit) %in% c(13,14,15,16,17,18,19,20,21,22) ~ "Evening",
+      hour(Time_of_visit) %in% c(23,0,1,2,3,4,5,6) ~ "Night"
+    )
+  )
+
+```
+
 **Added a new column Updated_time_of_day, categorizes each time into Early Morning, Late Morning, Afternoon, Evening and Night.**
 
 *Although this is a good grouping for Time of Day each patient visited the Emergency Department, I think it would be a better idea to group it based on the 3, 24-hour shift of Nurses and Doctors. This would be a better analysis that would give us insights, such as "we saw a significantly longer wait times during Night Shifts". Some of the possible reasons can be: Low Nurse-to-patient ratio.*
@@ -124,6 +184,13 @@ ERdata <- ERdata %>%
   select(-hour)   # removes temporary hour column
 
 sum(is.na(ERdata$Updated_time_of_day)) # check for NA values
+```
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
 
 
 ```
@@ -145,9 +212,11 @@ Added a new column "Satisfaction_group" that categorizes Patient.Satisfaction sc
 ERdata <- ERdata %>%
   mutate(
     Satisfaction_group = case_when(
-      Patient.Satisfaction %in% c(4, 5) ~ "Satisfied",
+      Patient.Satisfaction == 1 ~ "Very Dissatisfied",
+      Patient.Satisfaction == 2 ~ "Dissatisfied",
       Patient.Satisfaction == 3 ~ "Neutral",
-      Patient.Satisfaction %in% c(1, 2) ~ "Dissatisfied",
+      Patient.Satisfaction == 4 ~ "Satisfied",
+      Patient.Satisfaction == 5 ~ "Very Satisfied"
     )
   )
 ```
@@ -242,7 +311,32 @@ ERdata %>%
   theme_minimal()
 ```
 
-In terms of Season, we see more patients visiting the Emergency department in Summer, followed by Winter, Fall, and Spring.
+In terms of Season, we see more patients visiting the Emergency department in Summer, followed by Winter, Fall, and Spring.\
+\
+**Number of Patients by Hospital by Region**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+
+ERdata %>% 
+  group_by(Region, Hospital.Name) %>% 
+  summarize(No_of_Patients = n()) %>% 
+  mutate(Hospital.Name = reorder_within(Hospital.Name, No_of_Patients, Region)) %>%
+  ggplot(aes(Hospital.Name,No_of_Patients, fill=Region)) +
+    geom_col() +
+    scale_x_reordered() +
+    labs(
+      title = "Distribution of Patients by Region and Hospital",
+      x = "",
+      y = "Nuber of Patients"
+    ) +
+    coord_flip() +
+    theme_minimal()
+  
+```
 
 **Number of Patients by Urgency Level**
 
@@ -274,9 +368,9 @@ ERdata %>%
 
 
 ERdata %>% 
-  group_by(Time_of_Day) %>% 
+  group_by(Shift) %>% 
   summarize(No_of_patients = n()) %>% 
-  ggplot(aes(Time_of_Day, No_of_patients)) +
+  ggplot(aes(Shift, No_of_patients)) +
   geom_col() +
   labs(
     title = "Distribution of Patients by Shift",
@@ -286,54 +380,323 @@ ERdata %>%
   theme_minimal()
 ```
 
-## Finding the best regression model
-
-**Convert categorical variables to factors**
-
-*Factors should be applied when creating the regression model.*
+**Distribution of Nurse-to-Patient ratio per visit**
 
 ```{r}
 #| warning: false
 #| message: false
 #| include: true
-#| 
-ERdata <- ERdata %>%
+
+ERdata %>% 
+  ggplot(aes(Nurse.to.Patient.Ratio)) +
+    geom_bar() +
+  labs(
+    title = "Distribution of Nurse-to-Patient ratio per Visit",
+    x = "Nurse-to-Patient Ratio",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+```
+
+**Distribution of Specialist available per visit**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  ggplot(aes(factor(Specialist.Availability))) +
+    geom_bar() +
+    labs(
+      title = "Distribution of Specialist Available every patient Visit",
+      x = "Specialist Available",
+      y = "Count"
+    ) +
+    theme_minimal()
+
+```
+
+**Distribution of Available beds per visit**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  ggplot(aes("",Available.Beds)) +
+    geom_violin(fill="skyblue", alpha=0.6) +
+    geom_boxplot(width=0.05, fill="orange", color="black") +
+    labs(
+      title = "Violin plot for the number of beds available per patient visit",
+      x = "",
+      y = "Available Beds"
+    ) +
+    theme_minimal()
+  
+```
+
+**Time to Registration**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  ggplot(aes("",Time.to.Registration.min)) +
+    geom_violin(fill="skyblue", alpha=0.6) +
+    geom_boxplot(width=0.05, fill="orange", color="black", outlier.size=2.5, outlier.color="red") +
+    labs(
+      title = "Violin plot for Time to Registration(minutes)",
+      x = "",
+      y = "Time to Registration (min)"
+    ) +
+    theme_minimal()
+
+```
+
+**Time to Triage**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  ggplot(aes("",Time.to.Triage.min)) +
+    geom_violin(fill="skyblue", alpha=0.6) +
+    geom_boxplot(width=0.05, fill="orange", color="black", outlier.size=2.5, outlier.color="red") +
+    labs(
+      title = "Violin plot for Time to Triage (minutes)",
+      x = "",
+      y = "Time to Triage (min)"
+    ) +
+    theme_minimal()
+```
+
+**Time to Medical Professional**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  ggplot(aes("",Time.to.Medical.Professional.min)) +
+    geom_violin(fill="skyblue", alpha=0.6) +
+    geom_boxplot(width=0.05, fill="orange", color="black", outlier.size=2.5, outlier.color="red") +
+    labs(
+      title = "Violin plot for the Time it takes to see a Medical Professional",
+      x = "",
+      y = "Time to see Medical Professional(min)"
+    ) +
+    theme_minimal()
+```
+
+**Total Wait time**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  ggplot(aes("",Total.Wait.Time.min/60)) +
+    geom_violin(fill="skyblue", alpha=0.6) +
+    geom_boxplot(width=0.05, fill="orange", color="black", outlier.size=2.5, outlier.color="red") +
+    labs(
+      title = "Violin plot for the Total Wait Time (hour)",
+      x = "",
+      y = "Total Wait Time (hr)"
+    ) +
+    theme_minimal()
+```
+
+**Patient Outcome distribution**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  ggplot(aes(Patient.Outcome)) +
+    geom_bar() +
+    labs(
+      title = "Distribution of Patient Outcome",
+      x = "Outcomes",
+      y = "Count"
+    ) +
+    theme_minimal()
+```
+
+**Patient Satisfaction distribution**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+ERdata %>% 
+  ggplot(aes(factor(Patient.Satisfaction))) +
+    geom_bar() +
+    labs(
+      title = "Distribution of Patient Satisfaction",
+      x = "Satisfaction Score",
+      y = "Count"
+    ) +
+    theme_minimal()
+
+```
+
+# Modeling
+
+This section is where the best predictor variables are going to be identified to form the best multiple regression equation that will predict total wait time and patient satisfaction.
+
+These are the predictor variables for Total wait time:
+
+-   Region (factor)
+
+-   Day of Week (factor)
+
+-   Season (factor)
+
+-   Urgency level (factor)
+
+-   Nurse-to-Patient ratio
+
+-   Specialist Availability
+
+-   Available beds
+
+-   Shift (factor)
+
+These are the predictor variables for Patient Satisfaction:
+
+-   Urgency Level (factor)
+
+-   Nurse-to-Patient ratio
+
+-   Specialist Availability
+
+-   Available beds
+
+-   Shift (factor)
+
+-   Time to Registration
+
+-   Time to Triage
+
+-   Time to Medical Professional min
+
+-   Patient Outcome
+
+## **Fitting the maximum regression model for Wait Time and Patient Satisfaction:**
+
+```{r}
+#| warning: false
+#| message: false
+#| include: true
+
+# Wait Time
+WaitTime_var <- ERdata %>% 
   mutate(
     Region = factor(Region),
-    Season = factor(Season),
     Day.of.Week = factor(Day.of.Week),
-    Updated_time_of_day = factor(Updated_time_of_day)
+    Season = factor(Season),
+    Urgency.Level = factor(Urgency.Level),
+    Shift = factor(Shift)
+  ) %>% 
+  select(
+    Region,
+    Day.of.Week,
+    Season,
+    Urgency.Level,
+    Nurse.to.Patient.Ratio,
+    Specialist.Availability,
+    Available.Beds,
+    Shift,
+    Total.Wait.Time.min
+  )
+  
+WaitTime_maxmodel <- WaitTime_var %>% 
+  lm(
+    Total.Wait.Time.min ~
+      Region +
+      Day.of.Week +
+      Season +
+      Urgency.Level +
+      Nurse.to.Patient.Ratio +
+      Specialist.Availability +
+      Available.Beds +
+      Shift, 
+    .
   )
 
+# Patient Satisfaction
+PatientSat_var <- ERdata %>% 
+  mutate(
+    Urgency.Level = factor(Urgency.Level),
+    Shift = factor(Shift),
+    Patient.Outcome = factor(Patient.Outcome),
+  ) %>% 
+  select(
+    Urgency.Level,
+    Nurse.to.Patient.Ratio,
+    Specialist.Availability,
+    Available.Beds,
+    Shift,
+    Time.to.Registration.min,
+    Time.to.Triage.min,
+    Time.to.Medical.Professional.min,
+    Patient.Outcome,
+    Patient.Satisfaction
+  )
+
+PatientSat_maxmodel <- PatientSat_var %>% 
+  lm(
+    Patient.Satisfaction ~
+      Urgency.Level +
+      Nurse.to.Patient.Ratio +
+      Specialist.Availability +
+      Available.Beds +
+      Time.to.Registration.min +
+      Time.to.Triage.min +
+      Time.to.Medical.Professional.min +
+      Shift +
+      Patient.Outcome,
+    .
+  )
 ```
 
-**Creating a multiple regression model including all predictor variables**
+## Finding the best regression model for Wait Time and Patient Satisfaction
+
+Applying stepwise (both-direction) to find the best regression model to predict Wait Time and Patient Satisfaction
 
 ```{r}
-model_full <- lm(
-  Total.Wait.Time.min ~ 
-    Nurse.to.Patient.Ratio +
-    Specialist.Availability +
-    Available.Beds +
-    Region +
-    Season +
-    Day.of.Week +
-    Updated_time_of_day,
-  data = ERdata
-)
+#| warning: false
+#| message: false
+#| include: true
+
+WaitTime_step <- ols_step_both_aic(WaitTime_maxmodel)
+PatientSat_step <- ols_step_both_aic(PatientSat_maxmodel)
+
+WaitTime_best <- WaitTime_step$model
+PatientSat_best <- PatientSat_step$model
 
 ```
 
-**Stepwise regression, Backward/Forward combined (direction = "both")**
+Looking at the summary information for the best models generated by Stepwise to predict Wait Time and Patient Satisfaction.
 
 ```{r}
-model_step <- step(
-  model_full,
-  direction = "both",
-  trace = TRUE    # FALSE if don't want to trace/see each step
-)
+#| warning: false
+#| message: false
+#| include: true
 
-summary(model_step) # view final model
-model_step$call # view which predictors were kept
+summary(WaitTime_best)
+summary(PatientSat_best)
 
 ```
